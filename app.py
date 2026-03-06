@@ -1,17 +1,17 @@
 """
-MoMSME Document Formatter – Full Feature Edition v5.2
+MoMSME Document Formatter – Full Feature Edition v5.3
 
-NEW in v5.2:
-- Color theme selector: MoMSME, KPMG, Grant Thornton, Custom
-- All previous features retained
-
-NEW in v5.1:
-- PDF & PPTX enabled by default in UI
-- Speaker notes toggle: Minimal vs Detailed for PPTX
-- All table/numbering/naming fixes retained
-- Added Table of Contents toggle for both DOCX and PDF
-- Smart TOC positioning at the BEGINNING of the document
-- Smart heading detection for bold text lines
+Features:
+- Color themes: MoMSME, KPMG, Grant Thornton, Custom
+- MoMSME-style DOCX template (headings, tables, justified body)
+- Smart restyling for uploaded DOCX headings
+- DOCX/PPTX/PDF generation via Pandoc (PDF may not work on Streamlit Cloud)
+- Optional Table of Contents
+- PPTX speaker notes (Minimal / Detailed)
+- Cleans:
+  * Inline numeric references like [1], [2-3]
+  * Trailing numbered URL/file bibliography lists
+  * Pandoc-style footnote artifacts
 """
 
 import streamlit as st
@@ -32,7 +32,7 @@ from pptx import Presentation
 from pptx.util import Inches as PptInches, Pt as PptPt
 from pptx.dml.color import RGBColor as PptRGBColor
 
-# Ensure Pandoc/LaTeX see MacTeX binaries
+# On your Mac this helps LaTeX; on Streamlit Cloud it’s harmless
 os.environ["PATH"] = "/Library/TeX/texbin:" + os.environ.get("PATH", "")
 
 # =========================
@@ -46,35 +46,34 @@ GOVT_CONFIG = {
     "line_spacing": 1.5,
     "left_margin": 1.5,
     "navy_blue": RGBColor(0, 0, 128),
-    "version": "5.2",
+    "version": "5.3",
 }
 
-# Color theme presets
 COLOR_THEMES = {
     "MoMSME (Navy Blue)": {
-        "heading": (0, 0, 128),      # Navy Blue
-        "table_header": "00008B",     # Dark Blue (hex for tables)
-        "table_border": "4472C4",     # Medium Blue
-        "description": "Government standard navy blue theme"
+        "heading": (0, 0, 128),
+        "table_header": "00008B",
+        "table_border": "4472C4",
+        "description": "Government standard navy blue theme",
     },
     "KPMG (Blue)": {
-        "heading": (0, 51, 141),      # KPMG Blue #00338D
-        "table_header": "00338D",     # KPMG Blue
-        "table_border": "00338D",     # KPMG Blue
-        "description": "KPMG corporate brand colors"
+        "heading": (0, 51, 141),
+        "table_header": "00338D",
+        "table_border": "00338D",
+        "description": "KPMG corporate brand colors",
     },
     "Grant Thornton (Purple)": {
-        "heading": (80, 45, 127),     # GT Purple #502D7F
-        "table_header": "502D7F",     # GT Purple
-        "table_border": "502D7F",     # GT Purple
-        "description": "Grant Thornton brand colors"
+        "heading": (80, 45, 127),
+        "table_header": "502D7F",
+        "table_border": "502D7F",
+        "description": "Grant Thornton brand colors",
     },
     "Custom": {
-        "heading": (0, 0, 128),       # Default, will be overridden
-        "table_header": "4472C4",     # Default, will be overridden
-        "table_border": "4472C4",     # Default
-        "description": "Choose your own custom color"
-    }
+        "heading": (0, 0, 128),
+        "table_header": "4472C4",
+        "table_border": "4472C4",
+        "description": "Choose your own custom color",
+    },
 }
 
 # =========================
@@ -83,7 +82,7 @@ COLOR_THEMES = {
 
 def clean_ai_artifacts(raw_md: str) -> str:
     raw_md = re.sub(r"\[(web|cite):\d+\]", "", raw_md)
-    raw_md = re.sub(r"\[\d+\](?!\s*https?://)", "", raw_md)
+    raw_md = re.sub(r"\[\d+(?:\s*[-–]\s*\d+)?\]", "", raw_md)
 
     emoji_pattern = re.compile(
         "["
@@ -106,13 +105,6 @@ def clean_ai_artifacts(raw_md: str) -> str:
 
 
 def prepare_slides_md(md_content: str, auto_breaks: bool = True, notes_style: str = "Minimal") -> str:
-    """
-    Prepare MD for slides with configurable speaker notes.
-
-    notes_style:
-        - "Minimal": Simple placeholder notes
-        - "Detailed": Expanded talking points based on content
-    """
     if auto_breaks:
         md_content = re.sub(r"^## ", "\n---\n\n## ", md_content, flags=re.MULTILINE)
 
@@ -125,9 +117,7 @@ def prepare_slides_md(md_content: str, auto_breaks: bool = True, notes_style: st
 
         if ":::" not in md_content:
             md_content = re.sub(
-                slide_pattern,
-                add_minimal_notes,
-                md_content,
+                slide_pattern, add_minimal_notes, md_content,
                 flags=re.MULTILINE | re.DOTALL,
             )
 
@@ -140,7 +130,6 @@ def prepare_slides_md(md_content: str, auto_breaks: bool = True, notes_style: st
             slide_content = match.group(3) if match.group(3) else ""
 
             bullets = re.findall(r'^[-*]\s+(.+)$', slide_content, re.MULTILINE)
-
             notes = f"Speaker notes for: {heading_text}\n\n"
             if bullets:
                 notes += "Key points to cover:\n"
@@ -153,14 +142,11 @@ def prepare_slides_md(md_content: str, auto_breaks: bool = True, notes_style: st
 
         if ":::" not in md_content:
             md_content = re.sub(
-                slide_pattern,
-                add_detailed_notes,
-                md_content,
+                slide_pattern, add_detailed_notes, md_content,
                 flags=re.MULTILINE | re.DOTALL,
             )
 
     return md_content
-
 
 # =========================
 # PAGE NUMBERING & TOC
@@ -191,11 +177,7 @@ def add_page_numbers(doc: Document, style: str = "1,2,3", position: str = "right
         footer._element.remove(p)
 
     footer_para = footer.add_paragraph()
-
-    if position == "right":
-        footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    else:
-        footer_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT if position == "right" else WD_ALIGN_PARAGRAPH.CENTER
 
     if style == "Page X of Y":
         run = footer_para.add_run("Page ")
@@ -203,14 +185,12 @@ def add_page_numbers(doc: Document, style: str = "1,2,3", position: str = "right
         footer_para.add_run(" of ")
         run2 = footer_para.add_run()
         _add_field(run2, "NUMPAGES")
-
     elif style == "X of Y":
         run = footer_para.add_run()
         _add_field(run, "PAGE")
         footer_para.add_run(" of ")
         run2 = footer_para.add_run()
         _add_field(run2, "NUMPAGES")
-
     elif style == "1,2,3":
         run = footer_para.add_run()
         _add_field(run, "PAGE")
@@ -222,16 +202,11 @@ def add_page_numbers(doc: Document, style: str = "1,2,3", position: str = "right
 
 
 def insert_docx_toc(doc: Document, heading_color: tuple):
-    """
-    Inserts a Table of Contents field at the BEGINNING of the document.
-    """
     if not doc.paragraphs:
         return
-        
-    # Get the very first paragraph in the document
+
     first_para = doc.paragraphs[0]
-    
-    # 1. Insert formatted title BEFORE the first paragraph
+
     toc_heading = first_para.insert_paragraph_before()
     toc_heading.alignment = WD_ALIGN_PARAGRAPH.LEFT
     run_heading = toc_heading.add_run("Table of Contents")
@@ -239,67 +214,50 @@ def insert_docx_toc(doc: Document, heading_color: tuple):
     run_heading.font.size = Pt(16)
     run_heading.font.bold = True
     run_heading.font.color.rgb = RGBColor(*heading_color)
-    
-    # 2. Add TOC field code BEFORE the first paragraph (after the title)
+
     toc_para = first_para.insert_paragraph_before()
     run = toc_para.add_run()
 
-    fldChar1 = OxmlElement('w:fldChar')
-    fldChar1.set(qn('w:fldCharType'), 'begin')
+    fldChar1 = OxmlElement("w:fldChar")
+    fldChar1.set(qn("w:fldCharType"), "begin")
 
-    instrText = OxmlElement('w:instrText')
-    instrText.set(qn('xml:space'), 'preserve')
+    instrText = OxmlElement("w:instrText")
+    instrText.set(qn("xml:space"), "preserve")
     instrText.text = 'TOC \\o "1-3" \\h \\z \\u'
 
-    fldChar2 = OxmlElement('w:fldChar')
-    fldChar2.set(qn('w:fldCharType'), 'separate')
-
-    fldChar3 = OxmlElement('w:fldChar')
-    fldChar3.set(qn('w:fldCharType'), 'end')
+    fldChar2 = OxmlElement("w:fldChar")
+    fldChar2.set(qn("w:fldCharType"), "separate")
+    fldChar3 = OxmlElement("w:fldChar")
+    fldChar3.set(qn("w:fldCharType"), "end")
 
     run._r.append(fldChar1)
     run._r.append(instrText)
     run._r.append(fldChar2)
     run._r.append(fldChar3)
-    
-    # 3. Add page break BEFORE the first paragraph
+
     pb_para = first_para.insert_paragraph_before()
     pb_para.add_run().add_break(WD_BREAK.PAGE)
 
-
 # =========================
-# TABLE STYLING (FIX WHITE TEXT)
+# TABLE STYLING
 # =========================
 
 def fix_table_font_colors_preserve_background(doc: Document):
     for table in doc.tables:
         for row_idx, row in enumerate(table.rows):
             for cell in row.cells:
-                tcPr = cell._element.get_or_add_tcPr()
-                shd_elems = tcPr.findall(qn("w:shd"))
-                cell_has_bg = bool(shd_elems)
-
                 for para in cell.paragraphs:
                     for run in para.runs:
                         color = run.font.color.rgb if run.font.color is not None else None
-
                         if row_idx == 0:
                             if color is None:
                                 run.font.color.rgb = RGBColor(255, 255, 255)
                             continue
-
                         if color is None or (color[0], color[1], color[2]) == (255, 255, 255):
                             run.font.color.rgb = RGBColor(0, 0, 0)
 
 
 def apply_table_look_and_feel(doc: Document, table_header_color: str, table_border_color: str):
-    """
-    Apply themed table styling with custom colors.
-    
-    Args:
-        table_header_color: Hex color for header background (e.g., "4472C4")
-        table_border_color: Hex color for borders (e.g., "4472C4")
-    """
     for table in doc.tables:
         tbl = table._tbl
         tblPr = tbl.tblPr
@@ -314,7 +272,6 @@ def apply_table_look_and_feel(doc: Document, table_header_color: str, table_bord
             tblBorders.append(border)
         tblPr.append(tblBorders)
 
-        # Header row
         if len(table.rows) > 0:
             hdr_cells = table.rows[0].cells
             for cell in hdr_cells:
@@ -334,7 +291,6 @@ def apply_table_look_and_feel(doc: Document, table_header_color: str, table_bord
                         if run.font.size is None:
                             run.font.size = Pt(11)
 
-        # Body rows
         for row_idx, row in enumerate(table.rows[1:], start=1):
             for cell in row.cells:
                 for paragraph in cell.paragraphs:
@@ -343,7 +299,6 @@ def apply_table_look_and_feel(doc: Document, table_header_color: str, table_bord
                             run.font.name = "Times New Roman"
                         if run.font.size is None:
                             run.font.size = Pt(11)
-
                 tcPr = cell._element.get_or_add_tcPr()
                 shd_elems = tcPr.findall(qn("w:shd"))
                 if row_idx % 2 == 0 and not shd_elems:
@@ -351,56 +306,121 @@ def apply_table_look_and_feel(doc: Document, table_header_color: str, table_bord
                     shading_elm.set(qn("w:fill"), "D9E2F3")
                     tcPr.append(shading_elm)
 
+# =========================
+# UNIVERSAL REFERENCE CLEANER
+# =========================
+
+def remove_all_numeric_refs_and_bibliography(doc: Document):
+    """
+    1) Remove inline numeric reference markers like [1], [2], [2-3], [10].
+    2) Remove trailing numbered URL/file bibliography at bottom, identified as
+       paragraphs starting with 'n.' and containing a URL or file-like token.
+    """
+    inline_pattern = re.compile(r"\[\d+(?:\s*[-–]\s*\d+)?\]")
+
+    for para in doc.paragraphs:
+        original = para.text
+        cleaned = inline_pattern.sub("", original)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+        if cleaned != original:
+            for r in list(para.runs):
+                r.clear()
+            if cleaned:
+                para.text = cleaned
+
+    paras = doc.paragraphs
+    start_idx = None
+
+    def is_reference_para(text: str) -> bool:
+        t = text.strip()
+        if not t:
+            return False
+        if not re.match(r"^\d+\.\s*", t):
+            return False
+        if ("http://" in t or "https://" in t or "www." in t
+                or ".pdf" in t or ".docx" in t or ".pptx" in t):
+            return True
+        return False
+
+    for i, p in enumerate(paras):
+        if is_reference_para(p.text):
+            start_idx = i
+            break
+
+    if start_idx is None:
+        return
+
+    end_idx = start_idx
+    for j in range(start_idx, len(paras)):
+        t = paras[j].text.strip()
+        if (
+            is_reference_para(t)
+            or t.startswith("If you want, the next step")
+            or t.startswith("⁂")
+            or t == ""
+        ):
+            end_idx = j
+        else:
+            break
+
+    for k in range(end_idx, start_idx - 1, -1):
+        el = paras[k]._element
+        el.getparent().remove(el)
+
+
+def remove_pandoc_style_footnote_artifacts(doc: Document):
+    inline_pattern = re.compile(r"\[\^\[[^\]]+\]\{[^}]*\}\^\]\(#fn\d+\)")
+    anchor_pattern = re.compile(r"\[\]\{#fn\d+\s+\.anchor\}")
+
+    for para in doc.paragraphs:
+        original = para.text
+        cleaned = inline_pattern.sub("", original)
+        cleaned = anchor_pattern.sub("", cleaned)
+        cleaned = re.sub(r"^\d+\.\s+Paper\.pdf\s*$", "", cleaned.strip())
+        if cleaned != original:
+            for r in list(para.runs):
+                r.clear()
+            if cleaned:
+                para.text = cleaned
 
 # =========================
 # HEADING RESTYLE FOR UPLOADED DOCX
 # =========================
 
 def restyle_docx_headings(doc: Document, heading_color=(0, 0, 128)):
-    """
-    Make headings use theme color TNR.
-    - True Word headings: style name starts with 'Heading'
-    - Pseudo-headings: Detects standalone lines under 150 chars where all text is bold.
-    """
     theme_color = RGBColor(*heading_color)
-    
+
     for para in doc.paragraphs:
         txt = para.text.strip()
         style = para.style
         sname = style.name.lower() if style is not None and style.name else ""
-        
         is_word_heading = sname.startswith("heading")
-        
-        # Detect bold standalone lines (pseudo-headings)
+
         is_pseudo_heading = False
         if txt and len(txt) < 150 and not is_word_heading:
-            # Check if all runs with actual text are bold
             text_runs = [r for r in para.runs if r.text.strip()]
             if text_runs and all(r.bold for r in text_runs):
                 is_pseudo_heading = True
-        
+
         if not (is_word_heading or is_pseudo_heading):
             continue
-        
-        # basic level‑based sizing
+
         if "1" in sname:
             size = Pt(16)
         elif "2" in sname:
             size = Pt(14)
         elif is_pseudo_heading:
-            size = Pt(14)  # Make bold pseudo-headings 14pt by default
+            size = Pt(14)
         else:
             size = Pt(13)
-            
+
         para.alignment = WD_ALIGN_PARAGRAPH.LEFT
         for run in para.runs:
             run.font.name = "Times New Roman"
             run.font.size = size
             run.font.bold = True
             run.font.color.rgb = theme_color
-            # Clear any highlight to keep it clean
             run.font.highlight_color = None
-            
 
 # =========================
 # METADATA & TEMPLATE DOCX
@@ -409,12 +429,9 @@ def restyle_docx_headings(doc: Document, heading_color=(0, 0, 128)):
 def set_document_properties(doc: Document, author: str = "Sandeep Prasad", title: str | None = None):
     core_props = doc.core_properties
     core_props.author = author
-    
-    # Truncate title to avoid the 255-char limit crash in Word properties
     safe_title = title or "MoMSME Document"
     if len(safe_title) > 250:
         safe_title = safe_title[:247] + "..."
-        
     core_props.title = safe_title
     core_props.subject = "Official Government Document"
     core_props.keywords = "MSME, Government of India"
@@ -521,7 +538,6 @@ def create_pptx_template(path: str, heading_color: tuple) -> str:
     prs.save(path)
     return path
 
-
 # =========================
 # JUSTIFY + HIGHLIGHT
 # =========================
@@ -571,7 +587,6 @@ def apply_yellow_highlight_from_markers(doc: Document, marker_pattern: str = r"=
             if kind == "highlight":
                 run.font.highlight_color = WD_COLOR_INDEX.YELLOW
 
-
 # =========================
 # TITLE + TIMESTAMP + FILENAMES
 # =========================
@@ -616,65 +631,21 @@ def build_output_name(base_override: str | None, auto_title: str | None, suffix:
     ts = get_timestamp()
     return f"{base}_{ts}.{suffix}"
 
-
 # =========================
 # GENERATION – MD SOURCE
 # =========================
 
-def md_to_docx_basic(md_text: str, doc: Document, options):
-    """
-    Basic Markdown renderer for Cloud (no Pandoc):
-    - '# '  -> main heading
-    - '## ' -> subheading
-    - '- ' or '* ' -> bullet list
-    - blank line -> empty paragraph
-    - others -> normal body paragraph
-    """
-    body_style = doc.styles["GovtBody"]
-    h1_style = doc.styles["GovtHeading1"]
-    h2_style = doc.styles["GovtHeading2"]
-    
-    lines = md_text.splitlines()
-    
-    for raw in lines:
-        line = raw.rstrip("\n")
-        
-        if not line.strip():
-            doc.add_paragraph("", style=body_style)
-            continue
-        
-        if line.startswith("# "):
-            text = line[2:].strip()
-            doc.add_paragraph(text, style=h1_style)
-            continue
-        
-        if line.startswith("## "):
-            text = line[3:].strip()
-            doc.add_paragraph(text, style=h2_style)
-            continue
-        
-        if line.lstrip().startswith(("- ", "* ")):
-            text = line.lstrip()[2:].strip()
-            para = doc.add_paragraph(text, style=body_style)
-            para.paragraph_format.left_indent = Pt(18)
-            para.paragraph_format.first_line_indent = Pt(-9)
-            continue
-        
-        doc.add_paragraph(line.strip(), style=body_style)
-        
-
 def generate_documents_from_md(content: str, output_formats, options, filename_base: str | None):
     results = {}
-    
+
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         auto_title = extract_title_from_md(content)
-        
+
         if "DOCX" in output_formats:
             docx_template = tmp_path / "template.docx"
             docx_output = tmp_path / "output.docx"
-            
-            # Create base template with styles
+
             create_docx_template(
                 path=str(docx_template),
                 header_text=options["header"],
@@ -691,12 +662,23 @@ def generate_documents_from_md(content: str, output_formats, options, filename_b
                 page_number_style=options["page_number_style"],
                 author=options["author"],
             )
-            
-            # Load template and append Markdown content
-            doc = Document(str(docx_template))
-            md_to_docx_basic(content, doc, options)
-            
-            # Post-processing
+
+            extra_args = [
+                f"--reference-doc={docx_template}",
+                "--from=markdown+pipe_tables+simple_tables+grid_tables+citations",
+            ]
+            if options["toc"]:
+                extra_args.append("--toc")
+
+            pypandoc.convert_text(
+                content,
+                to="docx",
+                format="md",
+                outputfile=str(docx_output),
+                extra_args=extra_args,
+            )
+
+            doc = Document(str(docx_output))
             force_justify(doc)
             apply_table_look_and_feel(
                 doc,
@@ -704,29 +686,75 @@ def generate_documents_from_md(content: str, output_formats, options, filename_b
                 table_border_color=options["table_border_color"],
             )
             fix_table_font_colors_preserve_background(doc)
-            apply_yellow_highlight_from_markers(doc)
-            
-            if options["page_number_style"] != "None":
-                style_map = {
-                    "1, 2, 3, ...": "1,2,3",
-                    "Page X of Y": "Page X of Y",
-                    "X of Y": "X of Y",
-                }
-                style = style_map.get(options["page_number_style"], "1,2,3")
-                add_page_numbers(doc, style=style, position="right")
-                
-            if options["toc"]:
-                insert_docx_toc(doc, heading_color=options["heading_color"])
-                
             set_document_properties(doc, author=options["author"], title=auto_title)
+            apply_yellow_highlight_from_markers(doc)
+
+            remove_all_numeric_refs_and_bibliography(doc)
+            remove_pandoc_style_footnote_artifacts(doc)
+
             doc.save(str(docx_output))
-            
+
             with open(docx_output, "rb") as f:
                 fname = build_output_name(filename_base, auto_title, "docx")
                 results["DOCX"] = (fname, f.read())
-                
-    return results
 
+        if "PPTX" in output_formats:
+            pptx_template = tmp_path / "ppt_template.pptx"
+            pptx_output = tmp_path / "output.pptx"
+
+            if options["govt_template"]:
+                create_pptx_template(str(pptx_template), options["heading_color"])
+
+            slide_content = prepare_slides_md(
+                content,
+                options["auto_breaks"],
+                notes_style=options.get("pptx_notes_style", "Minimal"),
+            )
+
+            extra_args = [
+                "--slide-level=2",
+                "--from=markdown+pipe_tables",
+            ]
+            if options["govt_template"]:
+                extra_args.append(f"--reference-doc={pptx_template}")
+
+            pypandoc.convert_text(
+                slide_content,
+                to="pptx",
+                format="md",
+                outputfile=str(pptx_output),
+                extra_args=extra_args,
+            )
+
+            with open(pptx_output, "rb") as f:
+                fname = build_output_name(filename_base, auto_title, "pptx")
+                results["PPTX"] = (fname, f.read())
+
+        if "PDF" in output_formats:
+            pdf_output = tmp_path / "output.pdf"
+
+            extra_args = [
+                "--pdf-engine=xelatex",
+                f"--variable=mainfont={options['font_body']}",
+                f"--variable=fontsize={options['body_size']}pt",
+                "--variable=geometry:margin=1.5in",
+            ]
+            if options["toc"]:
+                extra_args.append("--toc")
+
+            pypandoc.convert_text(
+                content,
+                to="pdf",
+                format="md",
+                outputfile=str(pdf_output),
+                extra_args=extra_args,
+            )
+
+            with open(pdf_output, "rb") as f:
+                fname = build_output_name(filename_base, auto_title, "pdf")
+                results["PDF"] = (fname, f.read())
+
+    return results
 
 # =========================
 # GENERATION – DOCX SOURCE
@@ -734,27 +762,26 @@ def generate_documents_from_md(content: str, output_formats, options, filename_b
 
 def generate_documents_from_docx(source_docx_bytes: bytes, output_formats, options, filename_base: str | None):
     results = {}
-    
+
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         src_path = tmp_path / "input.docx"
         with open(src_path, "wb") as f:
             f.write(source_docx_bytes)
-            
+
         doc = Document(str(src_path))
         auto_title = extract_title_from_docx(doc)
-        
+
         restyle_docx_headings(doc, heading_color=options["heading_color"])
-        
         force_justify(doc)
         apply_table_look_and_feel(
             doc,
             table_header_color=options["table_header_color"],
-            table_border_color=options["table_border_color"]
+            table_border_color=options["table_border_color"],
         )
         fix_table_font_colors_preserve_background(doc)
         apply_yellow_highlight_from_markers(doc)
-        
+
         if options["page_number_style"] != "None":
             style_map = {
                 "1, 2, 3, ...": "1,2,3",
@@ -763,80 +790,75 @@ def generate_documents_from_docx(source_docx_bytes: bytes, output_formats, optio
             }
             style = style_map.get(options["page_number_style"], "1,2,3")
             add_page_numbers(doc, style=style, position="right")
-            
-        # Insert TOC at the TOP of the doc if requested
+
         if options["toc"]:
             insert_docx_toc(doc, heading_color=options["heading_color"])
-            
+
         set_document_properties(doc, author=options["author"], title=auto_title)
+
+        remove_all_numeric_refs_and_bibliography(doc)
+        remove_pandoc_style_footnote_artifacts(doc)
+
         enhanced_path = tmp_path / "enhanced.docx"
         doc.save(str(enhanced_path))
-        
+
         if "DOCX" in output_formats:
             with open(enhanced_path, "rb") as f:
                 fname = build_output_name(filename_base, auto_title, "docx")
                 results["DOCX"] = (fname, f.read())
-                
-        # === Pandoc-based DOCX -> MD/PPTX/PDF disabled on Streamlit Cloud ===
-        # Pandoc is not available in the Streamlit Cloud container, so this
-        # block is commented out in the cloud-safe branch.
-        #
-        # if "PPTX" in output_formats or "PDF" in output_formats:
-        #     temp_md = tmp_path / "temp.md"
-        #     pypandoc.convert_file(
-        #         str(enhanced_path),
-        #         to="markdown",
-        #         format="docx",
-        #         outputfile=str(temp_md),
-        #     )
-        #     with open(temp_md, "r", encoding="utf-8") as f_md:
-        #         md_content = clean_ai_artifacts(f_md.read())
-        #
-        #     md_results = generate_documents_from_md(md_content, output_formats, options, filename_base)
-        #
-        #     for fmt in ["PPTX", "PDF"]:
-        #         if fmt in md_results:
-        #             results[fmt] = md_results[fmt]
-                
+
+        if "PPTX" in output_formats or "PDF" in output_formats:
+            temp_md = tmp_path / "temp.md"
+            pypandoc.convert_file(
+                str(enhanced_path),
+                to="markdown",
+                format="docx",
+                outputfile=str(temp_md),
+            )
+            with open(temp_md, "r", encoding="utf-8") as f_md:
+                md_content = clean_ai_artifacts(f_md.read())
+
+            md_results = generate_documents_from_md(
+                md_content, output_formats, options, filename_base
+            )
+            for fmt in ["PPTX", "PDF"]:
+                if fmt in md_results:
+                    results[fmt] = md_results[fmt]
+
     return results
-
-
 
 # =========================
 # STREAMLIT APP
 # =========================
 
 def main():
-    st.title("🎨 MoMSME Document Formatter v5.2")
+    st.title("🎨 MoMSME Document Formatter v5.3")
     st.caption(
-        "Full-featured formatter with MoMSME template, color themes (KPMG, Grant Thornton, Custom), "
-        "tables/images preserved, smart filenames, PPTX speaker notes, and Table of Contents."
+        "MoMSME template, color themes (KPMG, Grant Thornton, Custom), "
+        "tables/images preserved, smart filenames, PPTX speaker notes, ToC, "
+        "and automatic cleanup of numeric references and bibliography."
     )
 
     mode = st.radio("Input Type", ["Markdown", "DOCX"])
 
     output_formats = st.multiselect(
         "Output Formats",
-        ["DOCX"],
-        default=["DOCX"],
+        ["DOCX", "PPTX", "PDF"],
+        default=["DOCX", "PPTX", "PDF"],
     )
-    
 
     st.markdown("---")
     st.subheader("🎨 Color Theme")
-    
-    # Color theme selector
+
     theme_choice = st.selectbox(
         "Select Color Theme",
         list(COLOR_THEMES.keys()),
         index=0,
-        help="Choose a predefined color theme or select 'Custom' to pick your own colors"
+        help="Choose a predefined color theme or select 'Custom' to pick your own colors",
     )
-    
-    # Show theme description
+
     st.caption(f"_{COLOR_THEMES[theme_choice]['description']}_")
-    
-    # If Custom is selected, show color picker
+
     if theme_choice == "Custom":
         st.markdown("**Custom Color Selection**")
         col_a, col_b = st.columns(2)
@@ -844,19 +866,20 @@ def main():
             custom_heading = st.color_picker(
                 "Heading Color",
                 value="#00008B",
-                help="Choose the color for headings and titles"
+                help="Choose the color for headings and titles",
             )
         with col_b:
             custom_table = st.color_picker(
                 "Table Header Color",
                 value="#4472C4",
-                help="Choose the color for table headers and borders"
+                help="Choose the color for table headers and borders",
             )
-        
-        # Convert hex to RGB tuple
-        heading_rgb = tuple(int(custom_heading.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
-        table_hex = custom_table.lstrip('#').upper()
-        
+
+        heading_rgb = tuple(
+            int(custom_heading.lstrip("#")[i : i + 2], 16) for i in (0, 2, 4)
+        )
+        table_hex = custom_table.lstrip("#").upper()
+
         selected_theme = {
             "heading": heading_rgb,
             "table_header": table_hex,
@@ -864,17 +887,25 @@ def main():
         }
     else:
         selected_theme = COLOR_THEMES[theme_choice]
-    
-    # Show color preview
+
     st.markdown("**Theme Preview:**")
     preview_col1, preview_col2, preview_col3 = st.columns(3)
     with preview_col1:
         rgb_str = f"rgb{selected_theme['heading']}"
-        st.markdown(f"<div style='background-color: {rgb_str}; padding: 20px; border-radius: 5px; color: white; text-align: center;'><strong>Heading Color</strong></div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div style='background-color: {rgb_str}; padding: 20px; border-radius: 5px; color: white; text-align: center;'><strong>Heading Color</strong></div>",
+            unsafe_allow_html=True,
+        )
     with preview_col2:
-        st.markdown(f"<div style='background-color: #{selected_theme['table_header']}; padding: 20px; border-radius: 5px; color: white; text-align: center;'><strong>Table Header</strong></div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div style='background-color: #{selected_theme['table_header']}; padding: 20px; border-radius: 5px; color: white; text-align: center;'><strong>Table Header</strong></div>",
+            unsafe_allow_html=True,
+        )
     with preview_col3:
-        st.markdown(f"<div style='background-color: #{selected_theme['table_border']}; padding: 20px; border-radius: 5px; color: white; text-align: center;'><strong>Table Border</strong></div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div style='background-color: #{selected_theme['table_border']}; padding: 20px; border-radius: 5px; color: white; text-align: center;'><strong>Table Border</strong></div>",
+            unsafe_allow_html=True,
+        )
 
     st.markdown("---")
     st.subheader("📝 Look & Feel Settings")
@@ -886,7 +917,6 @@ def main():
         font_heading = st.selectbox("Heading Font", ["Times New Roman", "Calibri", "Arial"], index=0)
         body_size = st.slider("Body Font Size", 10, 14, GOVT_CONFIG["body_size"])
         heading_size = st.slider("Heading Base Size", 12, 18, GOVT_CONFIG["heading_size"])
-
     with col2:
         align = st.selectbox("Body Alignment", ["Justify", "Left"], index=0)
         bold_body = st.checkbox("Body Bold", False)
@@ -945,7 +975,7 @@ def main():
             with st.spinner("Generating documents..."):
                 cleaned = clean_ai_artifacts(md_input)
                 results = generate_documents_from_md(cleaned, output_formats, options, filename_base)
-            
+
             st.success("✅ Documents generated successfully!")
             for fmt, (fname, blob) in results.items():
                 st.download_button(
@@ -966,7 +996,7 @@ def main():
             with st.spinner("Processing document..."):
                 src_bytes = uploaded.read()
                 results = generate_documents_from_docx(src_bytes, output_formats, options, filename_base)
-            
+
             st.success("✅ Documents generated successfully!")
             for fmt, (fname, blob) in results.items():
                 st.download_button(
@@ -984,4 +1014,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
