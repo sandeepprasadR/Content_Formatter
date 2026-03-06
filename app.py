@@ -36,6 +36,17 @@ from pptx.dml.color import RGBColor as PptRGBColor
 os.environ["PATH"] = "/Library/TeX/texbin:" + os.environ.get("PATH", "")
 
 # =========================
+# ENSURE PANDOC (for Streamlit Cloud)
+# =========================
+
+def ensure_pandoc():
+    """Download Pandoc if not found (needed on Streamlit Cloud)."""
+    try:
+        pypandoc.get_pandoc_path()
+    except OSError:
+        pypandoc.download_pandoc()
+
+# =========================
 # GLOBAL CONFIG & COLOR THEMES
 # =========================
 
@@ -81,6 +92,7 @@ COLOR_THEMES = {
 # =========================
 
 def clean_ai_artifacts(raw_md: str) -> str:
+    # Remove tool-style citations and numeric refs
     raw_md = re.sub(r"\[(web|cite):\d+\]", "", raw_md)
     raw_md = re.sub(r"\[\d+(?:\s*[-–]\s*\d+)?\]", "", raw_md)
 
@@ -313,8 +325,7 @@ def apply_table_look_and_feel(doc: Document, table_header_color: str, table_bord
 def remove_all_numeric_refs_and_bibliography(doc: Document):
     """
     1) Remove inline numeric reference markers like [1], [2], [2-3], [10].
-    2) Remove trailing numbered URL/file bibliography at bottom, identified as
-       paragraphs starting with 'n.' and containing a URL or file-like token.
+    2) Remove trailing numbered URL/file bibliography at bottom.
     """
     inline_pattern = re.compile(r"\[\d+(?:\s*[-–]\s*\d+)?\]")
 
@@ -636,6 +647,7 @@ def build_output_name(base_override: str | None, auto_title: str | None, suffix:
 # =========================
 
 def generate_documents_from_md(content: str, output_formats, options, filename_base: str | None):
+    ensure_pandoc()
     results = {}
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -761,6 +773,7 @@ def generate_documents_from_md(content: str, output_formats, options, filename_b
 # =========================
 
 def generate_documents_from_docx(source_docx_bytes: bytes, output_formats, options, filename_base: str | None):
+    ensure_pandoc()
     results = {}
 
     with tempfile.TemporaryDirectory() as tmp:
