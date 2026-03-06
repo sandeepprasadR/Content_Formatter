@@ -621,17 +621,60 @@ def build_output_name(base_override: str | None, auto_title: str | None, suffix:
 # GENERATION – MD SOURCE
 # =========================
 
+def md_to_docx_basic(md_text: str, doc: Document, options):
+    """
+    Basic Markdown renderer for Cloud (no Pandoc):
+    - '# '  -> main heading
+    - '## ' -> subheading
+    - '- ' or '* ' -> bullet list
+    - blank line -> empty paragraph
+    - others -> normal body paragraph
+    """
+    body_style = doc.styles["GovtBody"]
+    h1_style = doc.styles["GovtHeading1"]
+    h2_style = doc.styles["GovtHeading2"]
+    
+    lines = md_text.splitlines()
+    
+    for raw in lines:
+        line = raw.rstrip("\n")
+        
+        if not line.strip():
+            doc.add_paragraph("", style=body_style)
+            continue
+        
+        if line.startswith("# "):
+            text = line[2:].strip()
+            doc.add_paragraph(text, style=h1_style)
+            continue
+        
+        if line.startswith("## "):
+            text = line[3:].strip()
+            doc.add_paragraph(text, style=h2_style)
+            continue
+        
+        if line.lstrip().startswith(("- ", "* ")):
+            text = line.lstrip()[2:].strip()
+            para = doc.add_paragraph(text, style=body_style)
+            para.paragraph_format.left_indent = Pt(18)
+            para.paragraph_format.first_line_indent = Pt(-9)
+            continue
+        
+        doc.add_paragraph(line.strip(), style=body_style)
+        
+
 def generate_documents_from_md(content: str, output_formats, options, filename_base: str | None):
     results = {}
-
+    
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         auto_title = extract_title_from_md(content)
-
+        
         if "DOCX" in output_formats:
             docx_template = tmp_path / "template.docx"
             docx_output = tmp_path / "output.docx"
-
+            
+            # Create base template with styles
             create_docx_template(
                 path=str(docx_template),
                 header_text=options["header"],
@@ -648,96 +691,40 @@ def generate_documents_from_md(content: str, output_formats, options, filename_b
                 page_number_style=options["page_number_style"],
                 author=options["author"],
             )
-
-            extra_args = [
-                f"--reference-doc={docx_template}",
-                "--from=markdown+pipe_tables+simple_tables+grid_tables+citations",
-            ]
-            if options["toc"]:
-                extra_args.append("--toc")
-
-            pypandoc.convert_text(
-                content,
-                to="docx",
-                format="md",
-                outputfile=str(docx_output),
-                extra_args=extra_args,
-            )
-
-            doc = Document(str(docx_output))
+            
+            # Load template and append Markdown content
+            doc = Document(str(docx_template))
+            md_to_docx_basic(content, doc, options)
+            
+            # Post-processing
             force_justify(doc)
             apply_table_look_and_feel(
-                doc, 
+                doc,
                 table_header_color=options["table_header_color"],
-                table_border_color=options["table_border_color"]
+                table_border_color=options["table_border_color"],
             )
             fix_table_font_colors_preserve_background(doc)
-            set_document_properties(doc, author=options["author"], title=auto_title)
             apply_yellow_highlight_from_markers(doc)
+            
+            if options["page_number_style"] != "None":
+                style_map = {
+                    "1, 2, 3, ...": "1,2,3",
+                    "Page X of Y": "Page X of Y",
+                    "X of Y": "X of Y",
+                }
+                style = style_map.get(options["page_number_style"], "1,2,3")
+                add_page_numbers(doc, style=style, position="right")
+                
+            if options["toc"]:
+                insert_docx_toc(doc, heading_color=options["heading_color"])
+                
+            set_document_properties(doc, author=options["author"], title=auto_title)
             doc.save(str(docx_output))
-
+            
             with open(docx_output, "rb") as f:
                 fname = build_output_name(filename_base, auto_title, "docx")
                 results["DOCX"] = (fname, f.read())
-
-        if "PPTX" in output_formats:
-            pptx_template = tmp_path / "ppt_template.pptx"
-            pptx_output = tmp_path / "output.pptx"
-
-            if options["govt_template"]:
-                create_pptx_template(str(pptx_template), options["heading_color"])
-
-            slide_content = prepare_slides_md(
-                content,
-                options["auto_breaks"],
-                notes_style=options.get("pptx_notes_style", "Minimal"),
-            )
-
-            extra_args = [
-                "--slide-level=2",
-                "--from=markdown+pipe_tables",
-            ]
-            if options["govt_template"]:
-                extra_args.append(f"--reference-doc={pptx_template}")
-
-            pypandoc.convert_text(
-                slide_content,
-                to="pptx",
-                format="md",
-                outputfile=str(pptx_output),
-                extra_args=extra_args,
-            )
-
-            with open(pptx_output, "rb") as f:
-                fname = build_output_name(filename_base, auto_title, "pptx")
-                results["PPTX"] = (fname, f.read())
-
-        if "PDF" in output_formats:
-            pdf_output = tmp_path / "output.pdf"
-
-            extra_args = [
-                "--pdf-engine=xelatex",
-                f"--variable=mainfont={options['font_body']}",
-                f"--variable=fontsize={options['body_size']}pt",
-                "--variable=geometry:margin=1.5in",
-            ]
-            
-            # Use Pandoc's built-in TOC for PDF
-            if options["toc"]:
-                extra_args.append("--toc")
-
-            pypandoc.convert_text(
-                content,
-                to="pdf",
-                format="md",
-                outputfile=str(pdf_output),
-                extra_args=extra_args,
-            )
-
-            with open(pdf_output, "rb") as f:
-                fname = build_output_name(filename_base, auto_title, "pdf")
-                results["PDF"] = (fname, f.read())
-
+                
     return results
 
 
@@ -747,18 +734,18 @@ def generate_documents_from_md(content: str, output_formats, options, filename_b
 
 def generate_documents_from_docx(source_docx_bytes: bytes, output_formats, options, filename_base: str | None):
     results = {}
-
+    
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         src_path = tmp_path / "input.docx"
         with open(src_path, "wb") as f:
             f.write(source_docx_bytes)
-
+            
         doc = Document(str(src_path))
         auto_title = extract_title_from_docx(doc)
-
+        
         restyle_docx_headings(doc, heading_color=options["heading_color"])
-
+        
         force_justify(doc)
         apply_table_look_and_feel(
             doc,
@@ -767,7 +754,7 @@ def generate_documents_from_docx(source_docx_bytes: bytes, output_formats, optio
         )
         fix_table_font_colors_preserve_background(doc)
         apply_yellow_highlight_from_markers(doc)
-
+        
         if options["page_number_style"] != "None":
             style_map = {
                 "1, 2, 3, ...": "1,2,3",
@@ -780,34 +767,39 @@ def generate_documents_from_docx(source_docx_bytes: bytes, output_formats, optio
         # Insert TOC at the TOP of the doc if requested
         if options["toc"]:
             insert_docx_toc(doc, heading_color=options["heading_color"])
-
+            
         set_document_properties(doc, author=options["author"], title=auto_title)
         enhanced_path = tmp_path / "enhanced.docx"
         doc.save(str(enhanced_path))
-
+        
         if "DOCX" in output_formats:
             with open(enhanced_path, "rb") as f:
                 fname = build_output_name(filename_base, auto_title, "docx")
                 results["DOCX"] = (fname, f.read())
-
-        if "PPTX" in output_formats or "PDF" in output_formats:
-            temp_md = tmp_path / "temp.md"
-            pypandoc.convert_file(
-                str(enhanced_path),
-                to="markdown",
-                format="docx",
-                outputfile=str(temp_md),
-            )
-            with open(temp_md, "r", encoding="utf-8") as f_md:
-                md_content = clean_ai_artifacts(f_md.read())
-
-            md_results = generate_documents_from_md(md_content, output_formats, options, filename_base)
-
-            for fmt in ["PPTX", "PDF"]:
-                if fmt in md_results:
-                    results[fmt] = md_results[fmt]
-
+                
+        # === Pandoc-based DOCX -> MD/PPTX/PDF disabled on Streamlit Cloud ===
+        # Pandoc is not available in the Streamlit Cloud container, so this
+        # block is commented out in the cloud-safe branch.
+        #
+        # if "PPTX" in output_formats or "PDF" in output_formats:
+        #     temp_md = tmp_path / "temp.md"
+        #     pypandoc.convert_file(
+        #         str(enhanced_path),
+        #         to="markdown",
+        #         format="docx",
+        #         outputfile=str(temp_md),
+        #     )
+        #     with open(temp_md, "r", encoding="utf-8") as f_md:
+        #         md_content = clean_ai_artifacts(f_md.read())
+        #
+        #     md_results = generate_documents_from_md(md_content, output_formats, options, filename_base)
+        #
+        #     for fmt in ["PPTX", "PDF"]:
+        #         if fmt in md_results:
+        #             results[fmt] = md_results[fmt]
+                
     return results
+
 
 
 # =========================
@@ -825,9 +817,10 @@ def main():
 
     output_formats = st.multiselect(
         "Output Formats",
-        ["DOCX", "PPTX", "PDF"],
-        default=["DOCX", "PPTX", "PDF"],
+        ["DOCX"],
+        default=["DOCX"],
     )
+    
 
     st.markdown("---")
     st.subheader("🎨 Color Theme")
@@ -991,3 +984,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
